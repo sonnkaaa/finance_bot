@@ -1,14 +1,11 @@
 import sqlite3
 
-# Путь к базе данных
 DB_PATH = "db/finance.db"
 
 def create_database():
-    """Создаёт файл базы данных и необходимые таблицы."""
     with sqlite3.connect(DB_PATH) as conn:
         cursor = conn.cursor()
 
-        # Создаём таблицу пользователей
         cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -17,7 +14,6 @@ def create_database():
         );
         """)
 
-        # Создаём таблицу расходов
         cursor.execute("""
         CREATE TABLE IF NOT EXISTS transactions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -29,7 +25,6 @@ def create_database():
         );
         """)
 
-        # Создаём таблицу бюджета
         cursor.execute("""
         CREATE TABLE IF NOT EXISTS budget (
             user_id INTEGER PRIMARY KEY,
