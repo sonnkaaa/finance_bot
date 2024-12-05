@@ -4,9 +4,9 @@ import sqlite3
 from datetime import datetime, time
 
 TOKEN = "7429779028:AAHsO1eKLL7-m-vhzf8m-i3bBX1kaheo7Io"
-
 DB_PATH = "db/finance.db"
 
+# Функция для выполнения запросов к базе данных
 def execute_query(query, params=()):
     with sqlite3.connect(DB_PATH) as conn:
         cursor = conn.cursor()
@@ -14,7 +14,7 @@ def execute_query(query, params=()):
         conn.commit()
         return cursor.fetchall()
 
-
+# Обработчик команды /start
 async def start(update: Update, context: CallbackContext):
     user_id = update.message.chat_id
     username = update.message.chat.username
@@ -43,7 +43,7 @@ async def start(update: Update, context: CallbackContext):
     await update.message.reply_text("Что вы хотите сделать?", reply_markup=reply_markup_inline)
     await update.message.reply_text("Используйте клавиши внизу для быстрого доступа к командам:", reply_markup=reply_markup_reply)
 
-
+# Обработчик кнопок
 async def handle_button_click(update: Update, context: CallbackContext):
     query = update.callback_query
     await query.answer()
@@ -65,6 +65,7 @@ async def handle_button_click(update: Update, context: CallbackContext):
         )
         context.user_data["action"] = "set_budget"
 
+# Обработчик текстовых сообщений
 async def handle_message(update: Update, context: CallbackContext):
     text = update.message.text.lower()
 
@@ -111,18 +112,46 @@ async def handle_message(update: Update, context: CallbackContext):
             amount = float(amount)
 
             user_id = update.message.chat_id
+
+            # Добавляем расход
             execute_query(
                 "INSERT INTO transactions (user_id, category, amount, date) VALUES ((SELECT id FROM users WHERE chat_id = ?), ?, ?, ?)",
                 (user_id, category, amount, datetime.now())
             )
-            # Улучшенное сообщение о добавлении расхода
-            await update.message.reply_text(
-                f"✅ *Добавлен расход!*\n\n"
-                f"Категория: *{category.capitalize()}*\n"
-                f"Сумма: *{amount}₽*\n\n"
-                f"Спасибо за то, что добавили свои расходы! 💰",
-                parse_mode="Markdown"
+
+            # Проверяем текущий бюджет и расходы
+            rows = execute_query(
+                "SELECT category, SUM(amount) FROM transactions WHERE user_id = (SELECT id FROM users WHERE chat_id = ?) GROUP BY category",
+                (user_id,)
             )
+            total_expenses = sum(row[1] for row in rows)
+
+            budget = execute_query(
+                "SELECT monthly_limit FROM budget WHERE user_id = (SELECT id FROM users WHERE chat_id = ?)",
+                (user_id,)
+            )
+            budget = budget[0][0] if budget else None
+
+            # Проверяем, превышен ли бюджет
+            if budget and total_expenses > budget:
+                # Находим категорию с наибольшими расходами
+                max_category, max_expense = max(rows, key=lambda x: x[1])
+                over_budget = total_expenses - budget
+                await update.message.reply_text(
+                    f"⚠️ *Внимание! Бюджет превышен!* ⚠️\n\n"
+                    f"💰 *Сумма превышения:* {over_budget:.2f}₽\n"
+                    f"🗂 *Категория с наибольшими расходами:* {max_category.capitalize()} — {max_expense:.2f}₽\n\n"
+                    f"Пожалуйста, контролируйте свои расходы!",
+                    parse_mode="Markdown"
+                )
+            else:
+                await update.message.reply_text(
+                    f"✅ *Добавлен расход!*\n\n"
+                    f"Категория: *{category.capitalize()}*\n"
+                    f"Сумма: *{amount}₽*\n\n"
+                    f"Спасибо за то, что добавили свои расходы! 💰",
+                    parse_mode="Markdown"
+                )
 
         except ValueError:
             await update.message.reply_text("Ошибка: Введите данные в формате: <категория> <сумма>.")
@@ -157,6 +186,7 @@ async def handle_message(update: Update, context: CallbackContext):
             await update.message.reply_text("❌ *Очистка отменена.*", parse_mode="Markdown")
         context.user_data.pop("action", None)
 
+# Обработчик статистики
 async def stats(update: Update, context: CallbackContext):
     if update.callback_query:
         user_id = update.callback_query.message.chat_id
@@ -185,55 +215,38 @@ async def stats(update: Update, context: CallbackContext):
     )
     budget = budget[0][0] if budget else None
 
-    if budget :
+    if budget:
         progress = (total_expenses / budget) * 100
         stats_message += (
             f"\n🎯 *Бюджет:* {budget}₽\n"
-            f"💰 *Потрачено:* {total_expenses}₽\n"
-            f"📈 *Статус использования бюджета:* {progress:.2f}%"
+            f"💳 *Всего расходов:* {total_expenses}₽ ({progress:.1f}% от бюджета)"
         )
+    else:
+        stats_message += f"\n💳 *Всего расходов:* {total_expenses}₽"
 
     await message.reply_text(stats_message, parse_mode="Markdown")
 
-async def reset_expenses(update: Update, context: CallbackContext):
-    user_id = update.message.chat_id
-    execute_query("DELETE FROM transactions WHERE user_id = (SELECT id FROM users WHERE chat_id = ?)", (user_id,))
-    await update.message.reply_text("Ваши расходы были успешно обнулены.")
-
-async def reset_expenses_job(context: CallbackContext):
-    execute_query("DELETE FROM transactions WHERE date < date('now', 'start of month')")
-    print("All expenses reset at the beginning of the month.")
-
+# Команда помощи
 async def help_command(update: Update, context: CallbackContext):
-    """Функция для команды /help."""
-    keyboard = [
-        [InlineKeyboardButton("Добавить расход", callback_data="add_expense")],
-        [InlineKeyboardButton("Статистика", callback_data="view_stats")],
-        [InlineKeyboardButton("Установить бюджет", callback_data="set_budget")],
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text(
-        "Выберите действие, используя кнопки ниже. Вот что я могу сделать:\n\n"
-        "1️⃣ Добавить расход\n"
-        "2️⃣ Просмотреть статистику\n"
-        "3️⃣ Установить месячный бюджет\n\n"
-        "Нажмите на соответствующую кнопку ниже ⬇️",
-        reply_markup=reply_markup
+        "📚 *Команды бота:*\n\n"
+        "- Добавить расход: *добавить расход*\n"
+        "- Просмотреть статистику: *статистика*\n"
+        "- Установить бюджет: *бюджет*\n"
+        "- Обнулить все расходы: *обнулить все*\n"
+        "- Помощь: *помощь*\n\n"
+        "Используйте кнопки для быстрого доступа к функциям!",
+        parse_mode="Markdown"
     )
 
+# Основной код
 def main():
     application = Application.builder().token(TOKEN).build()
 
     application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(CommandHandler("reset_expenses", reset_expenses))
-
     application.add_handler(CallbackQueryHandler(handle_button_click))
-
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-
-    job_queue = application.job_queue
-    job_queue.run_monthly(reset_expenses_job, when=time(hour=0, minute=0), day=1)
+    application.add_handler(CommandHandler("help", help_command))
 
     application.run_polling()
 
